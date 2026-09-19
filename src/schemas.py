@@ -12,7 +12,7 @@ class TemperatureUnit(str, Enum):
     FAHRENHEIT = "F"
 
 
-# --- 1. FlightSearch ---
+#   1. FlightSearch 
 
 class FlightSearch(BaseModel):
     """Input parameters for searching commercial flights."""
@@ -45,7 +45,7 @@ class FlightSearchOutput(BaseModel):
 FlightSearchInput = FlightSearch
 
 
-# --- 2. CalendarBooking ---
+#   2. CalendarBooking  
 
 class CalendarBooking(BaseModel):
     """Input parameters for scheduling a calendar event."""
@@ -66,7 +66,7 @@ class CalendarBookingOutput(BaseModel):
 CalendarBookingInput = CalendarBooking
 
 
-# --- 3. WeatherLookup ---
+#   3. WeatherLookup  
 
 class WeatherLookup(BaseModel):
     """Input parameters for retrieving real-time weather information."""
@@ -86,7 +86,7 @@ class WeatherLookupOutput(BaseModel):
 WeatherLookupInput = WeatherLookup
 
 
-# --- 4. UnitConversion ---
+#   4. UnitConversion  
 
 class UnitConversion(BaseModel):
     """Input parameters for converting values between physical units."""
@@ -107,7 +107,7 @@ class UnitConversionOutput(BaseModel):
 UnitConversionInput = UnitConversion
 
 
-# --- Schema Registries ---
+#   Schema Registries  
 
 TOOL_INPUT_SCHEMAS: Dict[str, Type[BaseModel]] = {
     "FlightSearch": FlightSearch,
