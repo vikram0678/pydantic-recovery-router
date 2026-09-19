@@ -1,1 +1,15 @@
-# docker-compose.yml
+version: '3.8'
+
+services:
+  evaluator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pydantic-recovery-evaluator
+    volumes:
+      - ./output:/app/output
+      - ./data:/app/data
+    env_file:
+      - .env.example
+    environment:
+      - PYTHONUNBUFFERED=1

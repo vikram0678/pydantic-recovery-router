@@ -12,14 +12,12 @@ class TemperatureUnit(str, Enum):
     FAHRENHEIT = "F"
 
 
-# ==============================================================================
-# 1. FlightSearch Schemas
-# ==============================================================================
+# --- 1. FlightSearch ---
 
 class FlightSearch(BaseModel):
     """Input parameters for searching commercial flights."""
-    origin: str = Field(..., min_length=2, description="Departure airport code or city name (e.g. 'JFK', 'MIA')")
-    destination: str = Field(..., min_length=2, description="Arrival airport code or city name (e.g. 'LHR', 'DEL')")
+    origin: str = Field(..., min_length=2, description="Departure airport code or city")
+    destination: str = Field(..., min_length=2, description="Arrival airport code or city")
     date: str = Field(..., description="Flight date in ISO-8601 format (YYYY-MM-DD)")
 
     @field_validator("date")
@@ -44,19 +42,16 @@ class FlightSearchOutput(BaseModel):
     price: float
 
 
-# Alias for explicit naming clarity
 FlightSearchInput = FlightSearch
 
 
-# ==============================================================================
-# 2. CalendarBooking Schemas
-# ==============================================================================
+# --- 2. CalendarBooking ---
 
 class CalendarBooking(BaseModel):
     """Input parameters for scheduling a calendar event."""
-    event_title: str = Field(..., min_length=1, description="Title or subject of the meeting/event")
-    start_time: datetime.datetime = Field(..., description="Event start timestamp in ISO format")
-    duration_minutes: int = Field(..., gt=0, description="Duration of the event in minutes")
+    event_title: str = Field(..., min_length=1, description="Title of the meeting/event")
+    start_time: datetime.datetime = Field(..., description="Start timestamp in ISO format")
+    duration_minutes: int = Field(..., gt=0, description="Duration in minutes")
 
 
 class CalendarBookingOutput(BaseModel):
@@ -68,18 +63,15 @@ class CalendarBookingOutput(BaseModel):
     duration_minutes: int
 
 
-# Alias for explicit naming clarity
 CalendarBookingInput = CalendarBooking
 
 
-# ==============================================================================
-# 3. WeatherLookup Schemas
-# ==============================================================================
+# --- 3. WeatherLookup ---
 
 class WeatherLookup(BaseModel):
     """Input parameters for retrieving real-time weather information."""
-    location: str = Field(..., min_length=1, description="Target city or location name (e.g. 'Tokyo', 'London')")
-    unit: TemperatureUnit = Field(default=TemperatureUnit.CELSIUS, description="Temperature measurement unit ('C' or 'F')")
+    location: str = Field(..., min_length=1, description="Target city or location")
+    unit: TemperatureUnit = Field(default=TemperatureUnit.CELSIUS, description="Unit ('C' or 'F')")
 
 
 class WeatherLookupOutput(BaseModel):
@@ -91,19 +83,16 @@ class WeatherLookupOutput(BaseModel):
     condition: str
 
 
-# Alias for explicit naming clarity
 WeatherLookupInput = WeatherLookup
 
 
-# ==============================================================================
-# 4. UnitConversion Schemas
-# ==============================================================================
+# --- 4. UnitConversion ---
 
 class UnitConversion(BaseModel):
     """Input parameters for converting values between physical units."""
-    value: float = Field(..., description="Numeric magnitude to convert")
-    from_unit: str = Field(..., min_length=1, description="Source unit (e.g. 'km', 'kg', 'miles')")
-    to_unit: str = Field(..., min_length=1, description="Target unit to convert into")
+    value: float = Field(..., description="Numeric value to convert")
+    from_unit: str = Field(..., min_length=1, description="Source unit (e.g. 'km', 'kg')")
+    to_unit: str = Field(..., min_length=1, description="Target unit (e.g. 'miles', 'lbs')")
 
 
 class UnitConversionOutput(BaseModel):
@@ -115,13 +104,10 @@ class UnitConversionOutput(BaseModel):
     to_unit: str
 
 
-# Alias for explicit naming clarity
 UnitConversionInput = UnitConversion
 
 
-# ==============================================================================
-# Registry Mapping
-# ==============================================================================
+# --- Schema Registries ---
 
 TOOL_INPUT_SCHEMAS: Dict[str, Type[BaseModel]] = {
     "FlightSearch": FlightSearch,

@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-import contextvars
 import functools
 import time
 from enum import Enum
 from typing import Any, Callable, Dict
-
-_current_fault_var: contextvars.ContextVar[str] = contextvars.ContextVar("current_fault", default="NONE")
-_timeout_delay_var: contextvars.ContextVar[float] = contextvars.ContextVar("timeout_delay", default=0.05)
 
 
 class FaultType(str, Enum):
@@ -15,56 +11,48 @@ class FaultType(str, Enum):
     TIMEOUT = "TIMEOUT"
     MALFORMED = "MALFORMED"
     MALFORMED_RESPONSE = "MALFORMED_RESPONSE"
+    PERSISTENT_TIMEOUT = "PERSISTENT_TIMEOUT"
 
 
 class FaultContext:
-    """
-    Thread-safe and process-configurable context for deterministic fault injection.
-    Can be configured per-test-case or per-request to simulate upstream degradation.
-    """
-    _fallback_fault: str = "NONE"
-    _fallback_delay: float = 0.05
+    """Configurable context for injected upstream failures."""
+    current_fault: str = "NONE"
+    timeout_delay: float = 0.01
+    transient: bool = True
+    call_count: int = 0
 
     @classmethod
-    @property
-    def current_fault(cls) -> str:
-        try:
-            return _current_fault_var.get()
-        except LookupError:
-            return cls._fallback_fault
-
-    @classmethod
-    def set_fault(cls, fault: str) -> None:
-        val = fault.upper() if fault else "NONE"
-        cls._fallback_fault = val
-        _current_fault_var.set(val)
+    def set_fault(cls, fault: str, transient: bool = True) -> None:
+        cls.current_fault = str(fault).upper() if fault else "NONE"
+        cls.transient = transient
+        cls.call_count = 0
 
     @classmethod
     def reset(cls) -> None:
-        cls._fallback_fault = "NONE"
-        _current_fault_var.set("NONE")
+        cls.current_fault = "NONE"
+        cls.transient = True
+        cls.call_count = 0
 
     @classmethod
     def set_timeout_delay(cls, seconds: float) -> None:
-        cls._fallback_delay = seconds
-        _timeout_delay_var.set(seconds)
+        cls.timeout_delay = seconds
 
     @classmethod
     def get_timeout_delay(cls) -> float:
-        try:
-            return _timeout_delay_var.get()
-        except LookupError:
-            return cls._fallback_delay
+        return cls.timeout_delay
+
+    @classmethod
+    def increment_call_count(cls) -> int:
+        cls.call_count += 1
+        return cls.call_count
+
+    @classmethod
+    def is_transient(cls) -> bool:
+        return cls.transient
 
 
 def _corrupt_payload(data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Alters returned payload keys to simulate real-world API drift/breaking changes
-    (e.g., vendor renamed keys from {"status": "ok", "temperature": 72} to
-    {"msg": "success", "temp_reading": "72 degrees"}).
-    This deterministically triggers Pydantic output validation errors while
-    preserving raw data for the Schema Repair recovery strategy.
-    """
+    """Alters returned payload keys to simulate API schema changes."""
     key_renames = {
         "status": "msg",
         "flight_number": "flight_code",
@@ -89,39 +77,33 @@ def _corrupt_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     corrupted: Dict[str, Any] = {}
     for key, value in data.items():
         corrupted[key_renames.get(key, f"raw_{key}")] = value
-    corrupted["vendor_schema_version"] = "v0-legacy-unsupported"
+    corrupted["vendor_schema_version"] = "v0-legacy"
     return corrupted
 
 
 def inject_fault(func: Callable[..., Dict[str, Any]]) -> Callable[..., Dict[str, Any]]:
-    """
-    Decorator intercepting mock tool invocations to induce deterministic faults.
-    Directives supported:
-      - NONE: Normal pass-through execution.
-      - TIMEOUT: Simulates upstream latency, then raises TimeoutError.
-      - MALFORMED / MALFORMED_RESPONSE: Executes tool normally, then alters the
-        returned dictionary so it violates the expected Pydantic output schema.
-    """
+    """Decorator to intercept tool calls and induce deterministic faults."""
     @functools.wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Dict[str, Any]:
-        fault = FaultContext.current_fault.upper()
+        fault = str(FaultContext.current_fault).upper()
+        call_count = FaultContext.increment_call_count()
+        is_transient = FaultContext.is_transient()
 
-        if fault == FaultType.TIMEOUT.value:
+        if fault == FaultType.PERSISTENT_TIMEOUT.value or (fault == FaultType.TIMEOUT.value and (not is_transient or call_count == 1)):
             delay = FaultContext.get_timeout_delay()
             if delay > 0:
                 time.sleep(delay)
-            raise TimeoutError(f"Upstream service for '{func.__name__}' timed out (HTTP 504 Gateway Timeout)")
+            raise TimeoutError("Upstream service timed out")
 
         result = func(*args, **kwargs)
 
         if fault in (FaultType.MALFORMED.value, FaultType.MALFORMED_RESPONSE.value):
-            return _corrupt_payload(result)
+            if not is_transient or call_count == 1:
+                return _corrupt_payload(result)
 
         return result
 
     return wrapper
 
 
-# Plural alias for convenience and contract compliance
 inject_faults = inject_fault
-

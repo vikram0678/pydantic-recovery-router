@@ -13,10 +13,7 @@ except ImportError:
 
 
 class LLMClient:
-    """
-    LLM interface supporting both real OpenAI API and an offline deterministic
-    fallback engine for reproducible evaluation and testing without API keys.
-    """
+    """Client interface for intent extraction and targeted recovery prompts."""
 
     def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o-mini"):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY", "").strip()
@@ -31,17 +28,13 @@ class LLMClient:
                 self.client = None
 
     def select_tool_and_args(self, request: str) -> Tuple[str, Dict[str, Any]]:
-        """
-        Parses user intent to select the appropriate tool and extract initial raw arguments.
-        """
+        """Parses user intent to select the appropriate tool and initial arguments."""
         if self.client:
             return self._openai_select_tool_and_args(request)
         return self._offline_select_tool_and_args(request)
 
     def extract_missing_field(self, tool_name: str, field_name: str, original_request: str) -> Any:
-        """
-        Targeted extraction prompt: Asks for only the missing field value.
-        """
+        """Extracts only the missing field value from context."""
         if self.client:
             prompt = (
                 f"The tool {tool_name} is missing the field '{field_name}'. "
@@ -59,9 +52,7 @@ class LLMClient:
         return self._offline_extract_missing_field(tool_name, field_name, original_request)
 
     def correct_type_error(self, field_name: str, expected_format: str, bad_value: Any, original_request: str) -> Any:
-        """
-        Targeted type correction prompt: Translates invalid formats (e.g. 'tomorrow') into expected formats.
-        """
+        """Translates an invalid format into the schema-compliant format."""
         if self.client:
             prompt = (
                 f"The field '{field_name}' requires format {expected_format}, "
@@ -79,9 +70,7 @@ class LLMClient:
         return self._offline_correct_type(field_name, expected_format, bad_value, original_request)
 
     def repair_malformed_response(self, malformed_payload: Dict[str, Any], target_schema_json: str) -> Dict[str, Any]:
-        """
-        Targeted schema repair: Re-maps a malformed tool response back into the expected output schema.
-        """
+        """Re-maps a malformed tool response back into the expected schema."""
         if self.client:
             prompt = (
                 f"The tool returned this malformed payload: {json.dumps(malformed_payload)}. "
@@ -98,9 +87,7 @@ class LLMClient:
 
         return self._offline_repair_response(malformed_payload)
 
-    # --------------------------------------------------------------------------
-    # OpenAI Live Implementations
-    # --------------------------------------------------------------------------
+    # --- Live OpenAI Tool Calling ---
 
     def _openai_select_tool_and_args(self, request: str) -> Tuple[str, Dict[str, Any]]:
         tools = [
@@ -185,17 +172,13 @@ class LLMClient:
 
         return self._offline_select_tool_and_args(request)
 
-    # --------------------------------------------------------------------------
-    # Deterministic Offline Simulator
-    # --------------------------------------------------------------------------
+    # --- Offline Deterministic Engine ---
 
     def _offline_select_tool_and_args(self, text: str) -> Tuple[str, Dict[str, Any]]:
         text_lower = text.lower()
 
-        # 1. FlightSearch intent
+        # FlightSearch
         if any(w in text_lower for w in ["flight", "fly", "plane", "ticket"]):
-            # Match airport codes or city names
-            # Look for patterns like "from JFK to LHR" or "to Paris"
             from_m = re.search(r"from\s+([A-Za-z]+)", text, re.IGNORECASE)
             to_m = re.search(r"to\s+([A-Za-z]+)", text, re.IGNORECASE)
             
@@ -208,47 +191,41 @@ class LLMClient:
             if destination:
                 args["destination"] = destination
 
-            # Check for date in text
             iso_m = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", text)
             if iso_m:
                 args["date"] = iso_m.group(1)
             elif "tomorrow" in text_lower:
-                args["date"] = "tomorrow"  # Intentionally triggers type/format error
+                args["date"] = "tomorrow"
             elif "next tuesday" in text_lower:
                 args["date"] = "next tuesday"
-            # If no date mentioned at all, date is omitted -> triggers missing field
 
             return "FlightSearch", args
 
-        # 2. CalendarBooking intent
+        # CalendarBooking
         if any(w in text_lower for w in ["calendar", "schedule", "book", "meeting", "event", "sync"]):
             args: Dict[str, Any] = {}
-            # Title
             title_m = re.search(r'(?:meeting|event|sync|titled|called)\s+["\']?([^"\',.]+)', text, re.IGNORECASE)
             args["event_title"] = title_m.group(1).strip() if title_m else "Meeting"
 
-            # Duration
             dur_m = re.search(r"(\d+)\s*(?:min|minute|minutes|mins)", text_lower)
             if dur_m:
                 args["duration_minutes"] = int(dur_m.group(1))
             elif "for an hour" in text_lower:
                 args["duration_minutes"] = 60
             elif "twenty" in text_lower:
-                args["duration_minutes"] = "twenty"  # Intentionally string type error
-            # If duration omitted, triggers missing field
+                args["duration_minutes"] = "twenty"
 
-            # Start time
             iso_time_m = re.search(r"\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\b", text)
             if iso_time_m:
                 args["start_time"] = iso_time_m.group(1)
             elif "at " in text_lower:
-                args["start_time"] = "tomorrow at 3pm"  # Type error
+                args["start_time"] = "tomorrow at 3pm"
             else:
                 args["start_time"] = "2026-09-20T10:00:00"
 
             return "CalendarBooking", args
 
-        # 3. WeatherLookup intent
+        # WeatherLookup
         if any(w in text_lower for w in ["weather", "temperature", "forecast", "climate"]):
             unit = "C"
             if "fahrenheit" in text_lower or re.search(r"\b(f|fahrenheit)\b", text_lower):
@@ -256,11 +233,10 @@ class LLMClient:
             elif "celsius" in text_lower or re.search(r"\b(c|celsius)\b", text_lower):
                 unit = "C"
             elif "kelvin" in text_lower:
-                unit = "Kelvin"  # Intentionally invalid enum
+                unit = "Kelvin"
 
             loc_m = re.search(r"(?:in|for|at)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)", text, re.IGNORECASE)
             raw_loc = loc_m.group(1).strip() if loc_m else "Tokyo"
-            # Strip trailing unit letter if captured
             words = raw_loc.split()
             if words and words[-1].upper() in ("C", "F", "CELSIUS", "FAHRENHEIT"):
                 words.pop()
@@ -268,23 +244,20 @@ class LLMClient:
 
             return "WeatherLookup", {"location": location, "unit": unit}
 
-
-        # 4. UnitConversion intent
+        # UnitConversion
         if any(w in text_lower for w in ["convert", "conversion", "miles", "km", "kg", "lbs"]):
             val_m = re.search(r"(\d+(?:\.\d+)?)", text)
             val = float(val_m.group(1)) if val_m else 10.0
 
-            # Match units
             units_m = re.findall(r"\b(km|miles|kg|lbs|m|ft|celsius|fahrenheit|c|f)\b", text_lower)
             from_unit = units_m[0] if len(units_m) > 0 else "km"
             to_unit = units_m[1] if len(units_m) > 1 else "miles"
 
             args = {"value": val, "from_unit": from_unit, "to_unit": to_unit}
             if "without value" in text_lower:
-                args.pop("value", None)  # triggers missing field
+                args.pop("value", None)
             return "UnitConversion", args
 
-        # Default fallback
         return "WeatherLookup", {"location": text.strip(), "unit": "C"}
 
     def _offline_extract_missing_field(self, tool_name: str, field_name: str, text: str) -> Any:
@@ -329,7 +302,6 @@ class LLMClient:
         return bad_value
 
     def _offline_repair_response(self, malformed: Dict[str, Any]) -> Dict[str, Any]:
-        """Re-map drifted payload keys back to canonical schema fields."""
         repaired: Dict[str, Any] = {}
         reverse_map = {
             "msg": "status",
@@ -358,7 +330,6 @@ class LLMClient:
             if target_key:
                 repaired[target_key] = v
 
-        # Normalize required defaults if missing
         if "status" not in repaired:
             repaired["status"] = "success"
         if "temperature" in repaired and isinstance(repaired["temperature"], str):

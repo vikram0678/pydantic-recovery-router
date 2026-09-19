@@ -11,7 +11,7 @@ from src.llm_client import LLMClient
 
 
 class RouterTrace:
-    """Records diagnostic metadata and recovery attempts for each request."""
+    """Tracks execution attempts and recovery policies triggered for a request."""
     def __init__(self) -> None:
         self.attempts: int = 0
         self.policies_triggered: List[str] = []
@@ -24,11 +24,7 @@ class RouterTrace:
 
 
 def parse_validation_error(exc: ValidationError) -> Tuple[str, str, Any, str]:
-    """
-    Parses a Pydantic ValidationError to identify the error category,
-    target field name, invalid value, and human-readable message.
-    Categories: 'missing_field' or 'type_error'.
-    """
+    """Identifies error category, field name, input value, and error message."""
     errors = exc.errors()
     first_err = errors[0] if errors else {}
     
@@ -41,7 +37,6 @@ def parse_validation_error(exc: ValidationError) -> Tuple[str, str, Any, str]:
     if err_type == "missing":
         return "missing_field", field_name, bad_value, msg
     
-    # Int, float, datetime, enum, or custom value_error format issues
     return "type_error", field_name, bad_value, msg
 
 
@@ -52,21 +47,15 @@ def process_request(
     trace: Optional[RouterTrace] = None
 ) -> Dict[str, Any]:
     """
-    Orchestrates intent parsing, tool selection, argument validation, execution,
-    and targeted fault recovery with a strictly bounded retry count of 1.
-
-    Returns:
-      - Validated output dictionary on success.
-      - Explicit failure: {"status": "error", "reason": "<failure_class>_unrecoverable"}
+    Routes a natural language request to the appropriate tool, validates arguments,
+    and applies bounded recovery policies on failure.
     """
     if llm_client is None:
         llm_client = LLMClient()
     if trace is None:
         trace = RouterTrace()
 
-    # --------------------------------------------------------------------------
-    # Step 1: LLM Tool Selection and Initial Argument Extraction
-    # --------------------------------------------------------------------------
+    # Intent parsing and tool selection
     tool_name, raw_args = llm_client.select_tool_and_args(request)
     trace.tool_selected = tool_name
 
@@ -78,9 +67,7 @@ def process_request(
     output_model_cls = TOOL_OUTPUT_SCHEMAS[tool_name]
     tool_func = TOOL_REGISTRY[tool_name]
 
-    # --------------------------------------------------------------------------
-    # Step 2: Validate Input Arguments via Pydantic Boundary
-    # --------------------------------------------------------------------------
+    # Input validation and recovery
     validated_input: Optional[Dict[str, Any]] = None
     try:
         validated_obj = input_model_cls(**raw_args)
@@ -88,26 +75,21 @@ def process_request(
     except ValidationError as val_err:
         errors = val_err.errors()
         missing_errors = [err for err in errors if err.get("type") == "missing"]
-        
         category = "missing_field" if missing_errors else "type_error"
 
         if not use_recovery:
-            # Baseline Mode: Give up immediately on first validation error
             reason = f"{category}_unrecoverable"
             trace.error_reason = reason
             return {"status": "error", "reason": reason}
 
-        # Targeted Recovery bounded to 1 retry
         trace.record_attempt(category)
 
         if category == "missing_field":
-            # Policy 1: Targeted Missing Field Re-prompt for each missing field
             for err in missing_errors:
                 field_name = str(err["loc"][-1])
                 resolved_value = llm_client.extract_missing_field(tool_name, field_name, request)
                 raw_args[field_name] = resolved_value
         else:
-            # Policy 2: Targeted Type Correction Re-prompt
             for err in errors:
                 field_name = str(err["loc"][-1])
                 bad_value = err.get("input")
@@ -116,20 +98,15 @@ def process_request(
                 corrected_value = llm_client.correct_type_error(field_name, format_hint, bad_value, request)
                 raw_args[field_name] = corrected_value
 
-        # Bounded Retry Attempt
         try:
             retry_obj = input_model_cls(**raw_args)
             validated_input = retry_obj.model_dump()
         except ValidationError:
-            # Retry failed: give up explicitly without silent error
             reason = f"{category}_unrecoverable"
             trace.error_reason = reason
             return {"status": "error", "reason": reason}
 
-
-    # --------------------------------------------------------------------------
-    # Step 3: Tool Execution with Timeout Recovery
-    # --------------------------------------------------------------------------
+    # Tool execution and timeout recovery
     raw_output: Optional[Dict[str, Any]] = None
     try:
         raw_output = tool_func(**validated_input)
@@ -138,20 +115,16 @@ def process_request(
             trace.error_reason = "timeout_unrecoverable"
             return {"status": "error", "reason": "timeout_unrecoverable"}
 
-        # Policy 3: System-level Backoff and Retry (No LLM tokens used)
         trace.record_attempt("timeout_backoff")
-        time.sleep(0.1)  # Bounded backoff delay
+        time.sleep(0.1)
 
         try:
             raw_output = tool_func(**validated_input)
         except TimeoutError:
-            # Second timeout exhausts retry bound
             trace.error_reason = "timeout_unrecoverable"
             return {"status": "error", "reason": "timeout_unrecoverable"}
 
-    # --------------------------------------------------------------------------
-    # Step 4: Output Validation & Schema Repair Strategy
-    # --------------------------------------------------------------------------
+    # Output validation and schema repair
     try:
         validated_output_obj = output_model_cls(**raw_output)
         return validated_output_obj.model_dump()
@@ -160,7 +133,6 @@ def process_request(
             trace.error_reason = "schema_repair_unrecoverable"
             return {"status": "error", "reason": "schema_repair_unrecoverable"}
 
-        # Policy 4: Schema Repair via targeted extraction prompt
         trace.record_attempt("schema_repair")
         target_schema_json = json.dumps(output_model_cls.model_json_schema())
         repaired_payload = llm_client.repair_malformed_response(raw_output, target_schema_json)
